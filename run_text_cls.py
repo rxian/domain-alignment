@@ -15,7 +15,7 @@ from datasets import load_metric
 import load_dataset_text_cls
 from load_dataset_text_cls import load_raw_dataset, tokenize_raw_dataset
 
-import iwda
+import domain_alignment
 import models_text_cls
 
 logger = logging.getLogger(__name__)
@@ -170,7 +170,7 @@ def main():
         if not args.use_im_weights:  
             # Vanilla domain adaptation
 
-            model_ad = iwda.W1CriticWithImWeights(feature_size, args.hidden_size_adversary)
+            model_ad = domain_alignment.W1CriticWithImWeights(feature_size, args.hidden_size_adversary)
 
         else:
             # Class-importance-weighted domain adaptation
@@ -185,7 +185,7 @@ def main():
                 else:
                     target_class_dist = torch.tensor(args.target_class_dist)
 
-                model_ad = iwda.W1CriticWithImWeights(feature_size, args.hidden_size_adversary, target_class_dist/source_class_dist)
+                model_ad = domain_alignment.W1CriticWithImWeights(feature_size, args.hidden_size_adversary, target_class_dist/source_class_dist)
             
             else:
 
@@ -194,7 +194,7 @@ def main():
                 if args.alpha_im_weights_init > 0:
                     # Initialize importance weights from model output on training datasets
 
-                    im_weights_estimator = iwda.ImWeightsEstimator(num_labels, source_class_dist, hard_confusion_mtx=args.hard_confusion_mtx, confusion_mtx_agg_mode='mean')
+                    im_weights_estimator = domain_alignment.ImWeightsEstimator(num_labels, source_class_dist, hard_confusion_mtx=args.hard_confusion_mtx, confusion_mtx_agg_mode='mean')
                     im_weights_estimator.to(args.device)
 
                     # Iterate over the training datasets
@@ -217,7 +217,7 @@ def main():
 
                     im_weights_init = im_weights_estimator.update_im_weights_qp() * args.alpha_im_weights_init + (1-args.alpha_im_weights_init)
 
-                model_ad = iwda.W1CriticWithImWeightsEstimation(feature_size, args.hidden_size_adversary, num_labels, source_class_dist, im_weights_init=im_weights_init, hard_confusion_mtx=args.hard_confusion_mtx)
+                model_ad = domain_alignment.W1CriticWithImWeightsEstimation(feature_size, args.hidden_size_adversary, num_labels, source_class_dist, im_weights_init=im_weights_init, hard_confusion_mtx=args.hard_confusion_mtx)
 
         model_ad.to(args.device)
 
@@ -309,7 +309,7 @@ def main():
                     lambda_domain_alignment = args.lambda_domain_alignment
                     if args.warmup_ratio_domain_alignment is not None:
                         lambda_domain_alignment *= min(1,completed_steps/(args.num_train_steps*args.warmup_ratio_domain_alignment))
-                    grl = iwda.GradientReversalLayer(lambda_domain_alignment)
+                    grl = domain_alignment.GradientReversalLayer(lambda_domain_alignment)
 
                     if args.use_im_weights:
                         # `alpha` is an importance weights regularizer enabled at beginning of training
@@ -334,7 +334,7 @@ def main():
 
             # Compute gradient penalty
             if args.domain_alignment:
-                grad_penalty = iwda.calc_gradient_penalty(model_ad, *features_detached)
+                grad_penalty = domain_alignment.calc_gradient_penalty(model_ad, *features_detached)
                 grad_penalty = args.lambda_grad_penalty * grad_penalty / args.gradient_accumulation_steps
                 grad_penalty.backward()
 
