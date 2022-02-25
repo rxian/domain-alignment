@@ -1,4 +1,4 @@
-"""Fine-tuning a 🤗 Transformers model on token classification tasks (NER, POS, CHUNKS)."""
+"""Finetuning a 🤗 Transformers model for sequence classification."""
 
 import argparse
 import logging
@@ -9,20 +9,23 @@ from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
 import transformers
-from transformers import MODEL_MAPPING, AdamW, AutoConfig, AutoModelForTokenClassification, AutoTokenizer, DataCollatorForTokenClassification, SchedulerType, default_data_collator, get_scheduler, set_seed
+from transformers import MODEL_MAPPING, AdamW, AutoConfig, AutoModelForSequenceClassification, AutoTokenizer, DataCollatorWithPadding, SchedulerType, default_data_collator, get_scheduler, set_seed
 
 from datasets import load_metric
-import load_dataset_token_cls
-from load_dataset_token_cls import load_raw_dataset, tokenize_raw_dataset
+import load_dataset_text_cls
+from load_dataset_text_cls import load_raw_dataset, tokenize_raw_dataset
 
 import iwda
-
+import models_text_cls
 
 logger = logging.getLogger(__name__)
 
 # You should update this to your particular problem to have better documentation of `model_type`
-MODEL_CONFIG_CLASSES = list(MODEL_MAPPING.keys())
-MODEL_TYPES = tuple(conf.model_type for conf in MODEL_CONFIG_CLASSES)
+# MODEL_CONFIG_CLASSES = list(MODEL_MAPPING.keys())
+# MODEL_TYPES = tuple(conf.model_type for conf in MODEL_CONFIG_CLASSES)
+MODEL_TYPES = ('bert', 'roberta', 'xlm-roberta',)
+transformers.BertForSequenceClassification = models_text_cls.BertForSequenceClassification
+transformers.RobertaForSequenceClassification = models_text_cls.RobertaForSequenceClassification
 
 
 def get_class_dist(dataset, num_classes):
@@ -32,21 +35,6 @@ def get_class_dist(dataset, num_classes):
         l, c = l[1:], c[1:]
     class_dist[l] = torch.tensor(c/np.sum(c)).type(class_dist.dtype)
     return class_dist
-
-
-def flatten_outputs(mask,*args):
-    mask = mask.view(-1)
-    flattened = []
-    for arg in args:
-        if len(arg.shape) == 2:
-            arg = arg.view(-1)
-        else:
-            arg = arg.view(-1, arg.shape[-1])
-        flattened.append(arg[mask==0])
-    if len(flattened) == 1:
-        return flattened[0]
-    elif len(flattened) > 1:
-        return flattened
 
 
 def main():
@@ -62,7 +50,7 @@ def main():
     # Setup logging, we only want one process per machine to log things on the screen.
     # accelerator.is_local_main_process is only True for one process per machine.
     logger.setLevel(logging.INFO)
-    load_dataset_token_cls.datasets.utils.logging.set_verbosity_warning()
+    load_dataset_text_cls.datasets.utils.logging.set_verbosity_warning()
     transformers.utils.logging.set_verbosity_info()
 
     # If passed along, set the training seed now.
@@ -70,72 +58,24 @@ def main():
         set_seed(args.seed)
 
     # Get the source domain dataset.
-    raw_datasets, label_list, label_to_id, text_column_name, label_column_name = load_raw_dataset(
+    raw_datasets, label_list, label_to_id = load_raw_dataset(
         dataset_name=args.dataset_name_source,
         dataset_config_name=args.dataset_config_name_source,
         train_file=args.train_file_source,
         validation_file=args.validation_file_source,
         text_column_name=args.text_column_name_source,
         label_column_name=args.label_column_name_source,
-        task_name=args.task_name,
     )
     num_labels = len(label_list)
 
     # Metrics
-    metric = load_metric("seqeval")
-
-    def get_labels(predictions, references):
-        # Transform predictions and references tensos to numpy arrays
-        y_pred = predictions.detach().cpu().clone().numpy()
-        y_true = references.detach().cpu().clone().numpy()
-
-        # Remove ignored index (special tokens)
-        true_predictions = [
-            [label_list[p] for (p, l) in zip(prediction, label) if l != -100]
-            for prediction, label in zip(y_pred, y_true)
-        ]
-        true_labels = [
-            [label_list[l] for (p, l) in zip(prediction, label) if l != -100]
-            for prediction, label in zip(y_pred, y_true)
-        ]
-
-        return true_predictions, true_labels
-
-    def compute_metrics():
-        results = metric.compute()
-        if args.return_entity_level_metrics:
-            # Unpack nested dictionaries
-            final_results = {}
-            for key, value in results.items():
-                if isinstance(value, dict):
-                    for n, v in value.items():
-                        final_results[f"{key}_{n}"] = v
-                else:
-                    final_results[key] = value
-            return final_results
-        else:
-            return {
-                "precision": results["overall_precision"],
-                "recall": results["overall_recall"],
-                "f1": results["overall_f1"],
-                "accuracy": results["overall_accuracy"],
-            }
+    metric = load_metric("accuracy")
 
     # Load pretrained model and tokenizer
     config = AutoConfig.from_pretrained(args.model_name_or_path, num_labels=num_labels)
-
     tokenizer_name_or_path = args.tokenizer_name if args.tokenizer_name else args.model_name_or_path
-    if not tokenizer_name_or_path:
-        raise ValueError(
-            "You are instantiating a new tokenizer from scratch. This is not supported by this script."
-            "You can do it from another script, save it, and load it from here, using --tokenizer_name."
-        )
-    if config.model_type in {"gpt2", "roberta"}:
-        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name_or_path, use_fast=True, add_prefix_space=True)
-    else:
-        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name_or_path, use_fast=True)
-
-    model = AutoModelForTokenClassification.from_pretrained(args.model_name_or_path, config=config)
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name_or_path)
+    model = AutoModelForSequenceClassification.from_pretrained(args.model_name_or_path, config=config)
     model.to(args.device)
 
     # Tokenize the source domain dataset
@@ -144,11 +84,10 @@ def main():
         raw_datasets=raw_datasets,
         label_list=label_list,
         label_to_id=label_to_id,
-        text_column_name=text_column_name,
-        label_column_name=label_column_name,
+        text_column_name=args.text_column_name_source,
+        label_column_name=args.label_column_name_source,
         pad_to_max_length=args.pad_to_max_length,
         max_length=args.max_length,
-        label_all_tokens=args.label_all_tokens,
     )
 
     # DataLoaders creation:
@@ -157,33 +96,35 @@ def main():
         # to tensors.
         data_collator = default_data_collator
     else:
-        # Otherwise, `DataCollatorForTokenClassification` will apply dynamic padding for us (by padding to the maximum length of
-        # the samples passed).
-        data_collator = DataCollatorForTokenClassification(tokenizer)
+        # Otherwise, `DataCollatorWithPadding` will apply dynamic padding for us (by padding to the maximum length of
+        # the samples passed). When using mixed precision, we add `pad_to_multiple_of=8` to pad all tensors to multiple
+        # of 8s, which will enable the use of Tensor Cores on NVIDIA hardware with compute capability >= 7.5 (Volta).
+        data_collator = DataCollatorWithPadding(tokenizer)
 
-    train_dataloader_source = DataLoader(
-        train_dataset_source, shuffle=True, collate_fn=data_collator, batch_size=args.per_device_per_domain_train_batch_size
-    )
+    train_dataloader_source = DataLoader(train_dataset_source, shuffle=True, collate_fn=data_collator, batch_size=args.per_device_per_domain_train_batch_size)
     eval_dataloader_source = DataLoader(eval_dataset_source, collate_fn=data_collator, batch_size=args.per_device_eval_batch_size)
 
     # Get, tokenize, and create DataLoaders for target domain datasets
     train_dataloader_target = None
     eval_dataloader_target = None
     if any([x is not None for x in [args.dataset_name_target, args.train_file_target, args.validation_file_target]]):
+        raw_datasets, _, _ = load_raw_dataset(
+            dataset_name=args.dataset_name_target,
+            dataset_config_name=args.dataset_config_name_target,
+            train_file=args.train_file_target,
+            validation_file=args.validation_file_target,
+            text_column_name=args.text_column_name_target,
+            label_column_name=args.label_column_name_target,
+        )
         train_dataset_target, eval_dataset_target = tokenize_raw_dataset(
-            tokenizer,
-            *load_raw_dataset(
-                dataset_name=args.dataset_name_target,
-                dataset_config_name=args.dataset_config_name_target,
-                train_file=args.train_file_target,
-                validation_file=args.validation_file_target,
-                text_column_name=args.text_column_name_target,
-                label_column_name=args.label_column_name_target,
-                task_name=args.task_name,
-            ),
+            tokenizer=tokenizer,
+            raw_datasets=raw_datasets,
+            label_list=label_list,
+            label_to_id=label_to_id,
+            text_column_name=args.text_column_name_target,
+            label_column_name=args.label_column_name_target,
             pad_to_max_length=args.pad_to_max_length,
             max_length=args.max_length,
-            label_all_tokens=args.label_all_tokens,
         )
         train_dataloader_target = DataLoader(
             train_dataset_target, shuffle=True, collate_fn=data_collator, batch_size=args.per_device_per_domain_train_batch_size
@@ -264,9 +205,8 @@ def main():
                                 batch = {k: v.to(args.device) for k, v in batch.items()}
                                 outputs = model(**batch)
 
-                                active_indices = torch.div((batch['labels']+100),100,rounding_mode='trunc') == 1
-                                y_true = None if is_target_dom else flatten_outputs(~active_indices, batch['labels'])
-                                y_proba = torch.nn.functional.softmax(flatten_outputs(~active_indices, outputs.logits), dim=-1)
+                                y_true = None if is_target_dom else batch['labels']
+                                y_proba = torch.nn.functional.softmax(outputs.logits,dim=-1)
 
                                 # Collect statistics for importance weights estimation
                                 im_weights_estimator(y_true=y_true, y_proba=y_proba, is_target_dom=is_target_dom)
@@ -346,7 +286,7 @@ def main():
 
             for is_target_dom, batch in enumerate(batches):
                 batch = {k: v.to(args.device) for k, v in batch.items()}
-                outputs = model(**batch, output_hidden_states=True)
+                outputs = model(**batch)
 
                 joint_loss = 0
                 if not is_target_dom:
@@ -356,13 +296,9 @@ def main():
 
                 if args.domain_alignment:
 
-                    # Mask out inputs that are not to be labeled
-                    # 
-                    # This mask should be available to both source and target domain inputs, obtained as a preprocessing step (e.g. only first wordpiece of each word is to be labeled in most NER implementations)
-                    active_indices = torch.div((batch['labels']+100),100,rounding_mode='trunc') == 1
-                    y_true = None if is_target_dom else flatten_outputs(~active_indices, batch['labels'])
-                    y_proba = torch.nn.functional.softmax(flatten_outputs(~active_indices, outputs.logits), dim=-1).detach()
-                    feature = flatten_outputs(~active_indices, outputs.hidden_states[-1])
+                    y_true = None if is_target_dom else batch['labels']
+                    y_proba = torch.nn.functional.softmax(outputs.logits, dim=-1).detach()
+                    feature = outputs.features
 
                     # Get CDAN features from kronecker product of model features and output softmax
                     feature = torch.bmm(y_proba.unsqueeze(2), feature.unsqueeze(1)).view(-1,y_proba.size(1) * feature.size(1))
@@ -426,11 +362,9 @@ def main():
                 with torch.no_grad():
                     outputs = model(**batch)
                 predictions = outputs.logits.argmax(dim=-1)
-                labels = batch["labels"]
-                preds, refs = get_labels(predictions, labels)
-                metric.add_batch(predictions=preds,references=refs)
+                metric.add_batch(predictions=predictions,references=batch["labels"])
             
-            this_metric = compute_metrics()
+            this_metric = metric.compute()
             eval_metric.update({k+('.target' if is_target_dom else '.source'):v for k,v in this_metric.items()})
 
         if args.domain_alignment and args.use_im_weights and args.estimate_im_weights:
@@ -444,25 +378,22 @@ def main():
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Finetune a transformers model on a text classification task (NER)")
+    parser = argparse.ArgumentParser(description="Finetune a transformers model on a text classification task")
 
     parser.add_argument("--dataset_name_source", type=str, default=None, help="The name of the dataset to use (via the datasets library). Source domain.")
     parser.add_argument("--dataset_config_name_source", type=str, default=None, help="The configuration name of the dataset to use (via the datasets library). Source domain.")
     parser.add_argument("--train_file_source", type=str, default=None, help="A csv or a json file containing the training data. Source domain.")
     parser.add_argument("--validation_file_source", type=str, default=None, help="A csv or a json file containing the validation data. Source domain.")
-    parser.add_argument("--text_column_name_source", type=str, default=None, help="The column name of text to input in the file (a csv or JSON file). Source domain.")
+    parser.add_argument("--text_column_name_source", type=str, nargs='+', default=None, help="The column name of text to input in the file (a csv or JSON file). Source domain.")
     parser.add_argument("--label_column_name_source", type=str, default=None, help="The column name of label to input in the file (a csv or JSON file). Source domain.")
 
     parser.add_argument("--dataset_name_target", type=str, default=None, help="The name of the dataset to use (via the datasets library). Target domain.")
     parser.add_argument("--dataset_config_name_target", type=str, default=None, help="The configuration name of the dataset to use (via the datasets library). Target domain.")
     parser.add_argument("--train_file_target", type=str, default=None, help="A csv or a json file containing the training data. Target domain.")
     parser.add_argument("--validation_file_target", type=str, default=None, help="A csv or a json file containing the validation data. Target domain.")
-    parser.add_argument("--text_column_name_target", type=str, default=None, help="The column name of text to input in the file (a csv or JSON file). Target domain.")
+    parser.add_argument("--text_column_name_target", type=str, nargs='+', default=None, help="The column name of text to input in the file (a csv or JSON file). Target domain.")
     parser.add_argument("--label_column_name_target", type=str, default=None, help="The column name of label to input in the file (a csv or JSON file). Target domain.")
 
-    parser.add_argument("--task_name", type=str, default="ner", choices=["ner", "pos", "chunk"], help="The name of the task.")
-    parser.add_argument("--label_all_tokens", action="store_true", help="Setting labels of all special tokens to -100 and thus PyTorch will ignore them.")
-    parser.add_argument("--return_entity_level_metrics", action="store_true", help="Indication whether entity level metrics are to be returned.")
     parser.add_argument("--max_length", type=int, default=512, help="The maximum total input sequence length after tokenization. Sequences longer than this will be truncated, sequences shorter will be padded if `--pad_to_max_length` is passed.")
     parser.add_argument("--pad_to_max_length", action="store_true", help="If passed, pad all samples to `max_length`. Otherwise, dynamic padding is used.")
 

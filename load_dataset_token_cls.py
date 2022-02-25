@@ -17,9 +17,6 @@ def load_raw_dataset(
     #
     # For CSV/JSON files, this script will use the column called 'tokens' or the first column if no column called
     # 'tokens' is found. You can easily tweak this behavior (see below).
-    #
-    # In distributed training, the load_dataset function guarantee that only one local process can concurrently
-    # download the dataset.
     if dataset_name is not None:
         # Downloading and loading a dataset from the hub.
         raw_datasets = load_dataset(dataset_name, dataset_config_name)
@@ -29,7 +26,7 @@ def load_raw_dataset(
             data_files["train"] = train_file
         if validation_file is not None:
             data_files["test"] = validation_file
-        extension = train_file.split(".")[-1]
+        extension = (train_file if train_file is not None else validation_file).split(".")[-1]
         raw_datasets = load_dataset(extension, data_files=data_files)
     # See more about loading any type of standard or custom dataset (from files, python dict, pandas DataFrame, etc) at
     # https://huggingface.co/docs/datasets/loading_datasets.html.
