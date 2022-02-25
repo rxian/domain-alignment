@@ -24,13 +24,13 @@ logger = logging.getLogger(__name__)
 # MODEL_CONFIG_CLASSES = list(MODEL_MAPPING.keys())
 # MODEL_TYPES = tuple(conf.model_type for conf in MODEL_CONFIG_CLASSES)
 MODEL_TYPES = ('bert', 'roberta', 'xlm-roberta',)
-transformers.BertForSequenceClassification = models_text_cls.BertForSequenceClassification
-transformers.RobertaForSequenceClassification = models_text_cls.RobertaForSequenceClassification
+transformers.models.bert.modeling_bert.BertForSequenceClassification = models_text_cls.BertForSequenceClassification
+transformers.models.roberta.modeling_roberta.RobertaForSequenceClassification = models_text_cls.RobertaForSequenceClassification
 
 
 def get_class_dist(dataset, num_classes):
     class_dist = torch.zeros(num_classes)
-    l, c = np.unique([x for y in dataset['labels'] for x in y],return_counts=True)
+    l, c = np.unique(dataset['labels'],return_counts=True)
     if -100 in l:
         l, c = l[1:], c[1:]
     class_dist[l] = torch.tensor(c/np.sum(c)).type(class_dist.dtype)
@@ -440,7 +440,7 @@ def parse_args():
     args = parser.parse_args()
 
     # Sanity checks
-    if args.task_name is None and args.train_file_source is None and args.validation_file_source is None:
+    if args.dataset_name_source is None and args.train_file_source is None and args.validation_file_source is None:
         raise ValueError("Need either a task name or a training/validation file.")
     else:
         if args.train_file_source is not None:
