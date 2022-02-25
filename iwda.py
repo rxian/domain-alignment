@@ -96,7 +96,7 @@ class W1CriticWithImWeights(torch.nn.Module):
 
         super(W1CriticWithImWeights, self).__init__()
         self.net = AdversarialNetwork(in_feature, hidden_size)
-        if self.im_weights is not None:
+        if im_weights is not None:
             self.register_buffer('im_weights', im_weights.view(-1), persistent=True)
         else:
             self.im_weights = None
@@ -151,7 +151,7 @@ class ImWeightsEstimator(torch.nn.Module):
         super(ImWeightsEstimator, self).__init__()
 
         self.num_classes = num_classes
-        self.source_class_dist = source_class_dist.view(-1)
+        self.register_buffer('source_class_dist', source_class_dist.view(-1), persistent=True)
         self.hard_confusion_mtx = hard_confusion_mtx
         self.confusion_mtx_agg_mode = confusion_mtx_agg_mode
 
@@ -161,20 +161,20 @@ class ImWeightsEstimator(torch.nn.Module):
         self.im_weights_d = torch.nn.Parameter(torch.zeros(num_classes))
 
         if confusion_mtx_agg_mode == 'exp':
-            self.register_buffer('target_pred_dist', self.source_class_dist, persistent=True)
-            self.register_buffer('source_confusion_mtx', torch.diag(self.source_class_dist), persistent=True)
+            self.register_buffer('target_pred_dist', self.source_class_dist.data, persistent=True)
+            self.register_buffer('source_confusion_mtx', torch.diag(self.source_class_dist.data), persistent=True)
         else: 
-            self.register_buffer('target_pred_dist', torch.zeros_like(self.source_class_dist), persistent=True)
-            self.register_buffer('source_confusion_mtx', torch.diag(torch.zeros_like(self.source_class_dist)), persistent=True)
+            self.register_buffer('target_pred_dist', torch.zeros_like(self.source_class_dist.data), persistent=True)
+            self.register_buffer('source_confusion_mtx', torch.diag(torch.zeros_like(self.source_class_dist.data)), persistent=True)
 
     def get_target_pred_dist(self):
-        if self.confusion_mtx_agg_mode == 'mean' and self.target_pred_dist.sum()==0:
-            raise ValueError('`target_pred_dist` has not been collected.')
+        # if self.confusion_mtx_agg_mode == 'mean' and self.target_pred_dist.sum()==0:
+        #     raise ValueError('`target_pred_dist` has not been collected.')
         return self.target_pred_dist/self.target_pred_dist.sum()
 
     def get_source_confusion_mtx(self):
-        if self.confusion_mtx_agg_mode == 'mean' and self.source_confusion_mtx.sum()==0:
-            raise ValueError('`source_confusion_mtx` has not been collected.')
+        # if self.confusion_mtx_agg_mode == 'mean' and self.source_confusion_mtx.sum()==0:
+        #     raise ValueError('`source_confusion_mtx` has not been collected.')
         return self.source_confusion_mtx/self.source_confusion_mtx.sum()
 
     def get_im_weights(self):
@@ -219,7 +219,7 @@ class ImWeightsEstimator(torch.nn.Module):
                 y_pred = torch.argmax(y_proba,dim=1).view(-1)
                 l, c = torch.unique(y_pred,return_counts=True)
                 this_target_pred_dist = torch.zeros_like(self.target_pred_dist)
-                this_target_pred_dist[l] = c
+                this_target_pred_dist[l] += c
             else:
                 this_target_pred_dist = torch.sum(y_proba, dim=0)
             if self.confusion_mtx_agg_mode == 'exp':
@@ -232,7 +232,7 @@ class ImWeightsEstimator(torch.nn.Module):
                 y_pred = torch.argmax(y_proba,dim=1).view(-1)
                 this_source_confusion_mtx = torch.zeros_like(self.source_confusion_mtx)
                 l, c = torch.unique(torch.stack([y_pred,y_true]).t(),dim=0,return_counts=True)
-                this_source_confusion_mtx[l[:,0], l[:,1]] = c
+                this_source_confusion_mtx[l[:,0], l[:,1]] += c
             else:
                 y_true_onehot = torch.zeros((len(y_true),self.num_classes),device=self.source_confusion_mtx.device).scatter(1, y_true.view(-1,1), 1)
                 this_source_confusion_mtx = (y_proba.transpose(1, 0) @ y_true_onehot)
