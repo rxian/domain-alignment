@@ -220,7 +220,7 @@ def main():
                     # Get regularized importance weights
                     im_weights_init = im_weights_estimator.update_im_weights_qp() * args.alpha_im_weights_init + (1-args.alpha_im_weights_init)
 
-                model_ad = domain_alignment.W1CriticWithImWeightsEstimation(feature_size, args.hidden_size_adversary, num_labels, source_class_dist, im_weights_init=im_weights_init, hard_confusion_mtx=args.hard_confusion_mtx)
+                model_ad = domain_alignment.W1CriticWithImWeightsEstimation(feature_size, args.hidden_size_adversary, num_labels, source_class_dist, im_weights_init=im_weights_init.detach().cpu(), hard_confusion_mtx=args.hard_confusion_mtx)
 
         model_ad.to(args.device)
 
