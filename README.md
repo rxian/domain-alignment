@@ -1,6 +1,6 @@
 # Importance-Weighted Domain Alignment
 
-Modules for performing class-importance-weighted domain alignment (IWDA) in PyTorch for unsupervised domain adaptation, as well as on text and token classifiers based on pre-trained language models using the [🤗 Transformers library](https://github.com/huggingface/transformers).
+Modules for performing class-importance-weighted domain alignment (IWDA) in PyTorch for unsupervised domain adaptation, as well as on text and token classifiers based on pre-trained language models using the [🤗 Transformers library](https://github.com/huggingface/transformers). The alignment is implemented via adversarial training with Wasserstein-1 critic loss and zero-centered gradient penalty.
 
 The modules are found in `domain_alignment.py`: `W1CriticWithImWeights`, `W1CriticWithImWeightsEstimation`, `ImWeightsEstimator`. Example usage in `run_text_cls.py` and `run_token_cls.py`.
 
