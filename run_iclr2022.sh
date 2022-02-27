@@ -1,7 +1,9 @@
+# Run ICLR 2022 IWDA and IWDA (oracle) experiments.
+
 # NER experiments on CoNLL 2002 and 2003 datasets.
 #
-# Source language is en, and target languages include es, nl and de (not available on Hugging Face Datasets).
-# The commands below perform transfer to es on `bert-base-multilingual-cased` (can be changed accordingly).
+# Source language is `en`. Target languages include de (not available on Hugging Face Datasets), es, nl.
+# The commands below perform transfer to `es` on `bert-base-multilingual-cased`.
 
 # First train a zero-shot model by fine-tuning on en data.
 python run_token_cls.py --dataset_name_source conll2003 --model_name_or_path bert-base-multilingual-cased --tokenizer_name bert-base-multilingual-cased --output_dir conll_zeroshot_en --device cuda
@@ -15,8 +17,8 @@ python run_token_cls.py --dataset_name_source conll2003 --dataset_name_target co
 
 # Sentiment analysis experiments on Multilingual Amazon Reviews Corpus.
 #
-# Source language is en, and target languages include de, es, fr, ja, zh.
-# The commands below perform transfer to ja on `bert-base-multilingual-cased` (can be changed accordingly).
+# Source language is `en`. Target languages include de, es, fr, ja, zh.
+# The commands below perform transfer to `ja` on `bert-base-multilingual-cased`.
 
 python run_text_cls.py --dataset_name_source amazon_reviews_multi --dataset_config_name_source en --text_column_name_source review_body --label_column_name_source stars --model_name_or_path bert-base-multilingual-cased --tokenizer_name bert-base-multilingual-cased --output_dir marc_zeroshot_en --device cuda
 

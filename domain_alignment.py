@@ -146,12 +146,14 @@ class W1CriticWithImWeightsEstimation(W1CriticWithImWeights):
     
 
 class ImWeightsEstimator(torch.nn.Module):
+    """A class importance weight estimator.
+
+    Includes helpers to collect statistics needed for estimation, and 
+    to compute the loss for optimizing the weights.
+    """
 
     def __init__(self, num_classes, source_class_dist, im_weights_init=None, hard_confusion_mtx=True, confusion_mtx_agg_mode='exp'):
-        """A class importance weight estimator.
-
-        Includes helpers to collect statistics needed for estimation, and 
-        to compute the loss for optimizing the weights.
+        """Inits the estimator.
 
         Args:
             num_classes: The number of classes.
@@ -193,14 +195,10 @@ class ImWeightsEstimator(torch.nn.Module):
 
     def get_target_pred_dist(self):
         """Gets the predicted target class distribution."""
-        # if self.confusion_mtx_agg_mode == 'mean' and self.target_pred_dist.sum()==0:
-        #     raise ValueError('`target_pred_dist` has not been collected.')
         return self.target_pred_dist/self.target_pred_dist.sum()
 
     def get_source_confusion_mtx(self):
         """Gets the source confusion matrix."""
-        # if self.confusion_mtx_agg_mode == 'mean' and self.source_confusion_mtx.sum()==0:
-        #     raise ValueError('`source_confusion_mtx` has not been collected.')
         return self.source_confusion_mtx/self.source_confusion_mtx.sum()
 
     def get_im_weights(self):

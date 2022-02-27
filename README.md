@@ -1,7 +1,34 @@
-# Domain Alignment for Transformers
+# Importance-Weighted Domain Alignment
 
+Modules for performing class-importance-weighted domain alignment (IWDA) in PyTorch for unsupervised domain adaptation, as well as on text and token classifiers based on pre-trained language models using the [🤗 Transformers library](https://github.com/huggingface/transformers).
 
-## Reference
+The modules are found in `domain_alignment.py`: `W1CriticWithImWeights`, `W1CriticWithImWeightsEstimation`, `ImWeightsEstimator`. Example usage in `run_text_cls.py` and `run_token_cls.py`.
+
+## Example: Unsupservised Cross-Lingual Learning
+
+One usage of IWDA is for unsupervised cross-lingual transfer of pre-trained language models on downstream applications, discussed and evaluated in our ICLR 2022 paper “[Cross-Lingual Transfer with Class-Weighted Language-Invariant Representations](https://openreview.net/forum?id=k7-s5HSSPE5)”. 
+
+The commands for transferring mBERT from English to Spanish on the named-entity recognition (NER) task (on CoNLL 2002 and 2003 datasets), and to Japanese on the sentiment analysis task (on Multilingual Amazon Reviews Corpus), are available in `run_iclr2022.sh` (check package `requirements.txt`). 
+
+Results on CoNLL NER with mBERT (average of 5 runs):
+
+| Method        | de    | es    | nl    |
+| ------------- | ----- | ----- | ----- |
+| Zero-shot     | 69.77 | 74.14 | 78.28 |
+| IWDA          | 72.56 | 76.11 | 78.63 |
+| IWDA (oracle) | 72.58 | 76.48 | 79.17 |
+
+Results on MARC sentiment analysis with mBERT (average of 3 runs):
+
+| Method        | de    | es    | fr    | ja    | zh    |
+| ------------- | ----- | ----- | ----- | ----- | ----- |
+| Zero-shot     | 44.80 | 46.49 | 46.02 | 37.37 | 38.48 |
+| IWDA          | 51.94 | 49.77 | 49.78 | 42.62 | 44.04 |
+| IWDA (oracle) | 51.95 | 50.83 | 50.01 | 44.91 | 45.96 |
+
+## References
+
+The BibTeX entry for our paper is:
 
 ```bibtex
 @inproceedings{xian2022crosslingual,
@@ -10,5 +37,16 @@
   booktitle={International Conference on Learning Representations},
   year={2022},
   url={https://openreview.net/forum?id=k7-s5HSSPE5}
+}
+```
+
+Some code [comes from](https://github.com/microsoft/Domain-Adaptation-with-Conditional-Distribution-Matching-and-Generalized-Label-Shift) the following paper on importance-weighted unsupervised domain adaptaion:
+
+```bibtex
+@inproceedings{tachet2020domain,
+  title={Domain Adaptation with Conditional Distribution Matching and Generalized Label Shift},
+  author={Tachet des Combes, Remi and Zhao, Han and Wang, Yu-Xiang and Gordon, Geoff},
+  year={2020},
+  booktitle={Advances in Neural Information Processing Systems}
 }
 ```

@@ -259,16 +259,17 @@ def main():
                     for is_target_dom, dataloader in enumerate([train_dataloader_source, train_dataloader_target]):
                         for step, batch in enumerate(dataloader):
                             with torch.no_grad():
+                                # See main training loop for comments
                                 batch = {k: v.to(args.device) for k, v in batch.items()}
                                 outputs = model(**batch)
-
-                                y_true = None if is_target_dom else batch['labels']
-                                y_proba = torch.nn.functional.softmax(outputs.logits,dim=-1)
+                                active_indices = torch.div((batch['labels']+100),100,rounding_mode='trunc') == 1
+                                y_true = None if is_target_dom else flatten_outputs(~active_indices, batch['labels'])
+                                y_proba = torch.nn.functional.softmax(flatten_outputs(~active_indices, outputs.logits), dim=-1)
 
                                 # Collect statistics for importance weights estimation
                                 im_weights_estimator(y_true=y_true, y_proba=y_proba, is_target_dom=is_target_dom)
 
-                                # Limit # of training samples used to estimate importance weights
+                                # Limit num of training samples used to estimate importance weights
                                 if args.max_samples_im_weights_init is not None and step+1 >= args.max_samples_im_weights_init:
                                     break
 
@@ -358,7 +359,12 @@ def main():
 
                     # Mask out inputs that are not to be labeled.
                     # 
-                    # This mask should be available to both source and target domain inputs, obtained as a preprocessing step (e.g. only first wordpiece of each word is to be labeled in most NER implementations).
+                    # This mask should be available to both source and target domain inputs
+                    # from preprocessing (e.g. only first wordpiece of each word is to be 
+                    # labeled in most NER implementations).
+                    #
+                    # For our NER experiments, the masked out (non-active) tokens are ones
+                    # with the label -100. See `load_dataset_token_cls.py`.
                     active_indices = torch.div((batch['labels']+100),100,rounding_mode='trunc') == 1
                     y_true = None if is_target_dom else flatten_outputs(~active_indices, batch['labels'])
                     y_proba = torch.nn.functional.softmax(flatten_outputs(~active_indices, outputs.logits), dim=-1).detach()
