@@ -1,4 +1,8 @@
-"""Finetuning a 🤗 Transformers model for sequence classification."""
+"""
+Finetuning a 🤗 Transformers model for sequence classification.
+
+Adapted from https://github.com/huggingface/transformers/blob/master/examples/pytorch/text-classification/run_glue_no_trainer.py
+"""
 
 import argparse
 import logging
@@ -20,15 +24,19 @@ import models_text_cls
 
 logger = logging.getLogger(__name__)
 
-# You should update this to your particular problem to have better documentation of `model_type`
-# MODEL_CONFIG_CLASSES = list(MODEL_MAPPING.keys())
-# MODEL_TYPES = tuple(conf.model_type for conf in MODEL_CONFIG_CLASSES)
+# Tweak models for sequence classification in 🤗 Transformers to 
+# return tanh-pooled features provided to the linear classification 
+# head in each forward pass so that we can perform domain alignment.
+#
+# The tweaked models are defined in `models_text_cls.py`, and they 
+# replace the original models in Transformers library.
 MODEL_TYPES = ('bert', 'roberta', 'xlm-roberta',)
 transformers.models.bert.modeling_bert.BertForSequenceClassification = models_text_cls.BertForSequenceClassification
 transformers.models.roberta.modeling_roberta.RobertaForSequenceClassification = models_text_cls.RobertaForSequenceClassification
 
 
 def get_class_dist(dataset, num_classes):
+    # Counts labels in the `dataset` and returns the class distribution.
     class_dist = torch.zeros(num_classes)
     l, c = np.unique(dataset['labels'],return_counts=True)
     if -100 in l:
@@ -71,10 +79,11 @@ def main():
     # Metrics
     metric = load_metric("accuracy")
 
-    # Load pretrained model and tokenizer
+    # Load pre-trained model and tokenizer
     config = AutoConfig.from_pretrained(args.model_name_or_path, num_labels=num_labels)
     tokenizer_name_or_path = args.tokenizer_name if args.tokenizer_name else args.model_name_or_path
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_name_or_path)
+
     model = AutoModelForSequenceClassification.from_pretrained(args.model_name_or_path, config=config)
     model.to(args.device)
 
@@ -97,8 +106,7 @@ def main():
         data_collator = default_data_collator
     else:
         # Otherwise, `DataCollatorWithPadding` will apply dynamic padding for us (by padding to the maximum length of
-        # the samples passed). When using mixed precision, we add `pad_to_multiple_of=8` to pad all tensors to multiple
-        # of 8s, which will enable the use of Tensor Cores on NVIDIA hardware with compute capability >= 7.5 (Volta).
+        # the samples passed).
         data_collator = DataCollatorWithPadding(tokenizer)
 
     train_dataloader_source = DataLoader(train_dataset_source, shuffle=True, collate_fn=data_collator, batch_size=args.per_device_per_domain_train_batch_size)
@@ -148,7 +156,7 @@ def main():
     optimizer = AdamW(optimizer_grouped_parameters)
 
     # Scheduler and math around the number of training steps.
-    num_update_steps_per_epoch = int(np.ceil(len(train_dataloader_source) / args.gradient_accumulation_steps))
+    num_update_steps_per_epoch = int(np.ceil(len(train_dataloader_source) / args.grad_accumulation_steps))
     if args.num_train_steps is None:
         args.num_train_steps = args.num_train_epochs * num_update_steps_per_epoch
     else:
@@ -161,43 +169,37 @@ def main():
         num_training_steps=args.num_train_steps,
     )
 
-    # Load domain adversary, and create optimizer for it
+    # Create domain adversary, and its optimizer
     if args.domain_alignment:
-        
         # In CDAN, discriminator feature is kronecker product of model feature output and softmax output
         feature_size = model.config.hidden_size * num_labels
 
         if not args.use_im_weights:  
             # Vanilla domain adaptation
-
             model_ad = domain_alignment.W1CriticWithImWeights(feature_size, args.hidden_size_adversary)
-
         else:
             # Class-importance-weighted domain adaptation
-
             source_class_dist = get_class_dist(train_dataset_source, num_labels).type(torch.float32)
 
             if not args.estimate_im_weights:
-            
-                if args.target_class_dist is None:
+                # Importance weights are provided by the user (oracle)
+                if args.target_class_dist is not None:
+                    target_class_dist = torch.tensor(args.target_class_dist)
+                else:
                     # Target class distribution not provided; get from labeled target dataset (for evaluating IWDA-oracle)
                     target_class_dist = get_class_dist(train_dataset_target, num_labels)
-                else:
-                    target_class_dist = torch.tensor(args.target_class_dist)
 
                 model_ad = domain_alignment.W1CriticWithImWeights(feature_size, args.hidden_size_adversary, target_class_dist/source_class_dist)
-            
             else:
-
+                # Importance weights are estimated on-the-fly
                 im_weights_init = None
 
                 if args.alpha_im_weights_init > 0:
                     # Initialize importance weights from model output on training datasets
-
                     im_weights_estimator = domain_alignment.ImWeightsEstimator(num_labels, source_class_dist, hard_confusion_mtx=args.hard_confusion_mtx, confusion_mtx_agg_mode='mean')
                     im_weights_estimator.to(args.device)
 
-                    # Iterate over the training datasets
+                    # Iterate over the training datasets, and feed model outputs to IW estimator
                     model.eval()
                     for is_target_dom, dataloader in enumerate([train_dataloader_source, train_dataloader_target]):
                         for step, batch in enumerate(dataloader):
@@ -211,10 +213,11 @@ def main():
                                 # Collect statistics for importance weights estimation
                                 im_weights_estimator(y_true=y_true, y_proba=y_proba, is_target_dom=is_target_dom)
 
-                                # Limit on training samples for initializing importance weights
+                                # Limit # of training samples used to estimate importance weights
                                 if args.max_samples_im_weights_init is not None and step+1 >= args.max_samples_im_weights_init:
                                     break
 
+                    # Get regularized importance weights
                     im_weights_init = im_weights_estimator.update_im_weights_qp() * args.alpha_im_weights_init + (1-args.alpha_im_weights_init)
 
                 model_ad = domain_alignment.W1CriticWithImWeightsEstimation(feature_size, args.hidden_size_adversary, num_labels, source_class_dist, im_weights_init=im_weights_init, hard_confusion_mtx=args.hard_confusion_mtx)
@@ -239,7 +242,7 @@ def main():
         optimizer_ad = AdamW(optimizer_ad_grouped_parameters)
 
     # Train!
-    total_batch_size = args.per_device_per_domain_train_batch_size * args.gradient_accumulation_steps
+    total_batch_size = args.per_device_per_domain_train_batch_size * args.grad_accumulation_steps
 
     logger.info("***** Running training *****")
     logger.info(f"  Num examples source = {len(train_dataset_source)}")
@@ -248,11 +251,11 @@ def main():
     logger.info(f"  Num Epochs = {args.num_train_epochs}")
     logger.info(f"  Instantaneous batch size per device = {args.per_device_per_domain_train_batch_size}")
     logger.info(f"  Total train batch size (w. accumulation) = {total_batch_size}")
-    logger.info(f"  Gradient Accumulation steps = {args.gradient_accumulation_steps}")
+    logger.info(f"  Gradient Accumulation steps = {args.grad_accumulation_steps}")
     logger.info(f"  Total optimization steps = {args.num_train_steps}")
     if args.domain_alignment and args.use_im_weights:
         target_class_dist_estimate = [float("{0:0.4f}".format(i)) for i in (source_class_dist * model_ad.get_im_weights().detach().cpu()).numpy()]
-        logger.info(f"  Target class distribution estimated from importance weights (init) = {target_class_dist_estimate}")
+        logger.info(f"  Estimated target class distribution (init) = {target_class_dist_estimate}")
 
     # Only show the progress bar once on each machine.
     progress_bar = tqdm(range(args.num_train_steps))
@@ -291,7 +294,7 @@ def main():
                 joint_loss = 0
                 if not is_target_dom:
                     loss = outputs.loss
-                    loss = loss / args.gradient_accumulation_steps
+                    loss = loss / args.grad_accumulation_steps
                     joint_loss += loss
 
                 if args.domain_alignment:
@@ -320,25 +323,27 @@ def main():
                     else:
                         loss_ad = model_ad(grl(feature), y_true=y_true, is_target_dom=is_target_dom)
 
-                    loss_ad = lambda_domain_alignment * loss_ad / args.gradient_accumulation_steps
+                    loss_ad = lambda_domain_alignment * loss_ad / args.grad_accumulation_steps
                     joint_loss += loss_ad
 
                     # Update importance weights statistics and get its loss
                     if args.use_im_weights and args.estimate_im_weights:
                         model_ad.im_weights_estimator(y_true=y_true, y_proba=y_proba, is_target_dom=is_target_dom, s=args.lr_confusion_mtx)
                         loss_iw = model_ad.im_weights_estimator.get_im_weights_loss()
-                        loss_iw = loss_iw / args.gradient_accumulation_steps
+                        loss_iw = loss_iw / args.grad_accumulation_steps
                         joint_loss += loss_iw
                 
+                # Back-propagate the (joint) source classification (and domain alignment) loss
                 joint_loss.backward()
 
             # Compute gradient penalty
             if args.domain_alignment:
                 grad_penalty = domain_alignment.calc_gradient_penalty(model_ad, *features_detached)
-                grad_penalty = args.lambda_grad_penalty * grad_penalty / args.gradient_accumulation_steps
+                grad_penalty = args.lambda_grad_penalty * grad_penalty / args.grad_accumulation_steps
                 grad_penalty.backward()
 
-            if step % args.gradient_accumulation_steps == 0 or step == len(train_dataloader_source) - 1:
+            # Update parameters
+            if step % args.grad_accumulation_steps == 0 or step == len(train_dataloader_source) - 1:
                 optimizer.step()
                 if args.domain_alignment:
                     optimizer_ad.step()
@@ -354,19 +359,17 @@ def main():
 
         model.eval()
         eval_metric = {}
-        
         for is_target_dom, dataloader in enumerate(eval_dataloaders):
-
             for step, batch in enumerate(dataloader):
                 batch = {k: v.to(args.device) for k, v in batch.items()}
                 with torch.no_grad():
                     outputs = model(**batch)
                 predictions = outputs.logits.argmax(dim=-1)
                 metric.add_batch(predictions=predictions,references=batch["labels"])
-            
             this_metric = metric.compute()
             eval_metric.update({k+('.target' if is_target_dom else '.source'):v for k,v in this_metric.items()})
 
+        # Print estimated target domain class distribution
         if args.domain_alignment and args.use_im_weights and args.estimate_im_weights:
             target_class_dist_estimate = [float("{0:0.4f}".format(i)) for i in (source_class_dist * model_ad.get_im_weights().detach().cpu()).numpy()]
             eval_metric['target_class_dist_estimate'] = target_class_dist_estimate
@@ -384,42 +387,38 @@ def parse_args():
     parser.add_argument("--dataset_config_name_source", type=str, default=None, help="The configuration name of the dataset to use (via the datasets library). Source domain.")
     parser.add_argument("--train_file_source", type=str, default=None, help="A csv or a json file containing the training data. Source domain.")
     parser.add_argument("--validation_file_source", type=str, default=None, help="A csv or a json file containing the validation data. Source domain.")
-    parser.add_argument("--text_column_name_source", type=str, nargs='+', default=None, help="The column name of text to input in the file (a csv or JSON file). Source domain.")
+    parser.add_argument("--text_column_name_source", type=str, nargs='+', default=None, help="The column names of text to input in the file (a csv or JSON file). Source domain.")
     parser.add_argument("--label_column_name_source", type=str, default=None, help="The column name of label to input in the file (a csv or JSON file). Source domain.")
 
     parser.add_argument("--dataset_name_target", type=str, default=None, help="The name of the dataset to use (via the datasets library). Target domain.")
     parser.add_argument("--dataset_config_name_target", type=str, default=None, help="The configuration name of the dataset to use (via the datasets library). Target domain.")
     parser.add_argument("--train_file_target", type=str, default=None, help="A csv or a json file containing the training data. Target domain.")
     parser.add_argument("--validation_file_target", type=str, default=None, help="A csv or a json file containing the validation data. Target domain.")
-    parser.add_argument("--text_column_name_target", type=str, nargs='+', default=None, help="The column name of text to input in the file (a csv or JSON file). Target domain.")
+    parser.add_argument("--text_column_name_target", type=str, nargs='+', default=None, help="The column names of text to input in the file (a csv or JSON file). Target domain.")
     parser.add_argument("--label_column_name_target", type=str, default=None, help="The column name of label to input in the file (a csv or JSON file). Target domain.")
 
     parser.add_argument("--max_length", type=int, default=512, help="The maximum total input sequence length after tokenization. Sequences longer than this will be truncated, sequences shorter will be padded if `--pad_to_max_length` is passed.")
     parser.add_argument("--pad_to_max_length", action="store_true", help="If passed, pad all samples to `max_length`. Otherwise, dynamic padding is used.")
 
-    parser.add_argument("--seed", type=int, default=None, help="A seed for reproducible training.")
-
-    parser.add_argument("--model_name_or_path", type=str, help="Path to pretrained model or model identifier from huggingface.co/models.", required=True)
+    parser.add_argument("--model_name_or_path", type=str, help="Path to pre-trained model or model identifier from huggingface.co/models.", required=True)
+    parser.add_argument("--tokenizer_name", type=str, default=None, help="Pre-trained tokenizer name or path if not the same as model_name")
     parser.add_argument("--output_dir", type=str, default=None, help="Where to store the final model.")
 
     parser.add_argument("--num_train_epochs", type=int, default=4, help="Total number of training epochs to perform.")
     parser.add_argument("--num_train_steps", type=int, default=None, help="Total number of training steps to perform. If provided, overrides num_train_epochs.")
     parser.add_argument("--per_device_per_domain_train_batch_size", type=int, default=8, help="Batch size (per device and domain) for the training dataloader.")
     parser.add_argument("--per_device_eval_batch_size", type=int, default=8, help="Batch size (per device) for the evaluation dataloader.")
-    parser.add_argument("--gradient_accumulation_steps", type=int, default=1, help="Number of updates steps to accumulate before performing a backward/update pass.")
+    parser.add_argument("--grad_accumulation_steps", type=int, default=1, help="Number of updates steps to accumulate before performing a backward/update pass.")
 
     parser.add_argument("--lr", type=float, default=1e-5, help="Initial learning rate (after the potential warmup period) to use.")
     parser.add_argument("--weight_decay", type=float, default=0.01, help="Weight decay to use.")
     parser.add_argument("--lr_scheduler_type", type=SchedulerType, default="linear", help="The scheduler type to use.", choices=["linear", "cosine", "cosine_with_restarts", "polynomial", "constant", "constant_with_warmup"])
     parser.add_argument("--warmup_ratio", type=float, default=0.1, help="Ratio of training steps for the warmup in the lr scheduler.")
 
-    parser.add_argument("--warmup_ratio_domain_alignment", type=float, default=0.1)
-    parser.add_argument("--warmup_ratio_im_weights", type=float, default=0.1)
-    parser.add_argument("--tokenizer_name", type=str, default=None, help="Pretrained tokenizer name or path if not the same as model_name")
-
     parser.add_argument("--domain_alignment", action="store_true", help="Perform adversarial domain alignment.")
     parser.add_argument("--lambda_domain_alignment", type=float, default=0.005, help="Strength of the domain alignment.")
     parser.add_argument("--lr_adversary", type=float, default=5e-4, help="Learning rate of adversary.")
+    parser.add_argument("--warmup_ratio_domain_alignment", type=float, default=0.1, help="Ratio of training steps for warming up the strength of domain alignment.")
     parser.add_argument("--weight_decay_adversary", type=float, default=0.01, help="Weight decay for adversary to use.")
     parser.add_argument("--lambda_grad_penalty", type=float, default=10, help="Strength of the gradient penalty.")
     parser.add_argument("--hidden_size_adversary", type=int, default=2048, help="Width of adversarial network hidden layer.")
@@ -429,13 +428,14 @@ def parse_args():
     parser.add_argument("--estimate_im_weights", action="store_true", help="Estimate class-importance weights.")
     parser.add_argument("--lr_im_weights", type=float, default=5e-4, help="Learning rate for importance weights.")
     parser.add_argument("--weight_decay_im_weights", type=float, default=2, help="Strength of importance weights ell_2 regularization.")
+    parser.add_argument("--warmup_ratio_im_weights", type=float, default=0.1, help="Ratio of training steps for reducing the regularization on importance weights, as initial estimates could be inaccurate.")
     parser.add_argument("--lr_confusion_mtx", type=float, default=5e-3, help="Learning rate for statistics used to estimate importance weights.")
     parser.add_argument("--hard_confusion_mtx", action="store_true", help="Use hard label statistics for estimating importance weights.")
     parser.add_argument("--alpha_im_weights_init", type=float, default=0.75, help="If non-zero, replace uniformly initialized importance weights with statistics from pre-trained model by this ratio.")
-    parser.add_argument("--max_samples_im_weights_init", type=int, default=None)
+    parser.add_argument("--max_samples_im_weights_init", type=int, default=None, help="Max number of training samples to use for initializing importance weight estimates.")
 
-    parser.add_argument("--device", type=str, default="cpu")
-
+    parser.add_argument("--seed", type=int, default=None, help="A seed for reproducible training.")
+    parser.add_argument("--device", type=str, default="cpu", help="Device to train on, e.g. `cpu` or `cuda`.")
 
     args = parser.parse_args()
 

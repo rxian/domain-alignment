@@ -1,3 +1,5 @@
+"""Load dataset for sequence classification. Refactored from `run_text_cls.py`."""
+
 import datasets
 from datasets import load_dataset
 

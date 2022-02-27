@@ -1,3 +1,17 @@
+"""
+Tweak models for sequence classification in 🤗 Transformers to return
+tanh-pooled `features` that are fed into model's linear classification 
+layer. Tanh-pooled features are not included in `hidden_states`.
+
+These `features` are returned in each forward pass, and are used to 
+perform domain alignmnet.
+
+The tweaks are implemented on the following models for our experiments:
+- BertForSequenceClassification
+- RobertaForSequenceClassification
+- XLMRobertaForSequenceClassification (by extension)
+"""
+
 import torch
 from torch import nn
 from torch.nn import MSELoss, CrossEntropyLoss, BCEWithLogitsLoss
@@ -20,6 +34,7 @@ class SequenceClassifierOutput(ModelOutput):
     past_key_values: Optional[Tuple[Tuple[torch.FloatTensor]]] = None
     hidden_states: Optional[Tuple[torch.FloatTensor]] = None
     attentions: Optional[Tuple[torch.FloatTensor]] = None
+    # Also return pooled sequence features
     features: Optional[torch.FloatTensor] = None
 
 
@@ -101,6 +116,7 @@ class BertForSequenceClassification(BertPreTrainedModel):
             logits=logits,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
+            # Return tanh-pooled features
             features=pooled_output
         )
 
@@ -122,6 +138,7 @@ class RobertaClassificationHead(nn.Module):
         x = torch.tanh(x)
         x = self.dropout(x)
         x = self.out_proj(x)
+        # Return logits AND tanh-pooled features
         return x, pooled_output
 
 
@@ -165,8 +182,9 @@ class RobertaForSequenceClassification(RobertaPreTrainedModel):
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
         )
-        sequence_output, pooled_output = outputs[0]
-        logits = self.classifier(sequence_output)
+        sequence_output = outputs[0]
+        # Get logits AND tanh-pooled features
+        logits, pooled_output = self.classifier(sequence_output)
 
         loss = None
         if labels is not None:
@@ -200,5 +218,6 @@ class RobertaForSequenceClassification(RobertaPreTrainedModel):
             logits=logits,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
+            # Return tanh-pooled features
             features=pooled_output
         )

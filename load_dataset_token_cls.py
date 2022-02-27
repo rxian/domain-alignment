@@ -1,3 +1,5 @@
+"""Load dataset for token classification. Refactored from `run_token_cls.py`."""
+
 import datasets
 from datasets import ClassLabel, load_dataset
 

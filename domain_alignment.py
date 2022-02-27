@@ -14,7 +14,6 @@ class GradReverse(torch.autograd.Function):
     def backward(ctx, grad_output):
         return grad_output * -ctx.lambd, None
 
-
 class GradientReversalLayer(torch.nn.Module):
     def __init__(self, lambd=1):
         super(GradientReversalLayer, self).__init__()
@@ -29,6 +28,7 @@ class GradientReversalLayer(torch.nn.Module):
 
 def calc_gradient_penalty(netD, real_data, fake_data, center=0):
     """Computes ell_2 gradient penalty at interpolates between real and fake data.
+    
     Adapted from https://github.com/caogang/wgan-gp
 
     Args:
@@ -121,6 +121,7 @@ class W1CriticWithImWeights(torch.nn.Module):
         score = self.net(x)
         im_weights = self.get_im_weights()
         if not is_target_dom and im_weights is not None:
+            # Apply importance weights to the critic's scores on source examples.
             im_weights = (alpha*im_weights + (1-alpha)).detach()
             score = score * im_weights[y_true]
         loss = score.mean()
@@ -132,7 +133,7 @@ class W1CriticWithImWeights(torch.nn.Module):
 class W1CriticWithImWeightsEstimation(W1CriticWithImWeights):
     """An adversary with class-importance-weighted Wasserstein-1 loss.
     
-    Contains helpers to collect statistics and compute the loss for estimating the weights.
+    Inclues helpers to collect statistics and compute the loss for estimating the weights.
     """
 
     def __init__(self, in_feature, hidden_size, num_classes, source_class_dist, im_weights_init=None, hard_confusion_mtx=True):
@@ -147,6 +148,26 @@ class W1CriticWithImWeightsEstimation(W1CriticWithImWeights):
 class ImWeightsEstimator(torch.nn.Module):
 
     def __init__(self, num_classes, source_class_dist, im_weights_init=None, hard_confusion_mtx=True, confusion_mtx_agg_mode='exp'):
+        """A class importance weight estimator.
+
+        Includes helpers to collect statistics needed for estimation, and 
+        to compute the loss for optimizing the weights.
+
+        Args:
+            num_classes: The number of classes.
+            source_class_dist: The class distribution of the source domain.
+            im_weights_init: Initial importance weights (if None, initialized to 1).
+            hard_confusion_mtx: Whether use hard label statistics for estimating 
+                                importance weights.
+            confusion_mtx_agg_mode: Mode for aggregating statistics. Can be one of
+                                    ['exp','mean'].
+        
+        - 'exp' mode: Initialize `source_confusion_mtx` with `source_class_dist` and
+                      `target_pred_dist` with `source_class_dist * im_weights_init`,
+                      so that the IWs are optimal at initialization. The statistics
+                      are thereafter updated with exponential decay.
+        - 'mean' mode: Statistics are averaged (initialized to 0).
+        """
 
         super(ImWeightsEstimator, self).__init__()
 
@@ -155,32 +176,39 @@ class ImWeightsEstimator(torch.nn.Module):
         self.hard_confusion_mtx = hard_confusion_mtx
         self.confusion_mtx_agg_mode = confusion_mtx_agg_mode
 
+        # im_weights = im_weights_init + im_weights_d. 
+        # This decomposition allows us to easily regularize the deviations `im_weights_d`.
         if im_weights_init is None:
             im_weights_init = torch.ones(num_classes)
         self.register_buffer('im_weights_init', im_weights_init.view(-1), persistent=True)
         self.im_weights_d = torch.nn.Parameter(torch.zeros(num_classes))
 
+        # Initialize statistics.
         if confusion_mtx_agg_mode == 'exp':
             self.register_buffer('target_pred_dist', self.source_class_dist.data, persistent=True)
-            self.register_buffer('source_confusion_mtx', torch.diag(self.source_class_dist.data), persistent=True)
+            self.register_buffer('source_confusion_mtx', torch.diag(self.source_class_dist.data*self.im_weights_init.data), persistent=True)
         else: 
             self.register_buffer('target_pred_dist', torch.zeros_like(self.source_class_dist.data), persistent=True)
             self.register_buffer('source_confusion_mtx', torch.diag(torch.zeros_like(self.source_class_dist.data)), persistent=True)
 
     def get_target_pred_dist(self):
+        """Gets the predicted target class distribution."""
         # if self.confusion_mtx_agg_mode == 'mean' and self.target_pred_dist.sum()==0:
         #     raise ValueError('`target_pred_dist` has not been collected.')
         return self.target_pred_dist/self.target_pred_dist.sum()
 
     def get_source_confusion_mtx(self):
+        """Gets the source confusion matrix."""
         # if self.confusion_mtx_agg_mode == 'mean' and self.source_confusion_mtx.sum()==0:
         #     raise ValueError('`source_confusion_mtx` has not been collected.')
         return self.source_confusion_mtx/self.source_confusion_mtx.sum()
 
     def get_im_weights(self):
-        """Gets importance weights.
+        """Gets the importance weights.
 
-        Normalizes im_weights s.t. (source_class_dist * im_weights).sum() = 1.
+        Since gradient updates may send the weights outside the feasible region, 
+        we project them back before returning them. This is done via normalization
+        s.t. (source_class_dist * im_weights).sum() = 1.
         """
         iw_weights_old = torch.clamp(self.im_weights_d + self.im_weights_init, min=0).detach()
         source_dot_im_weights = (self.source_class_dist * iw_weights_old).sum()
@@ -189,7 +217,7 @@ class ImWeightsEstimator(torch.nn.Module):
         return self.im_weights_init + self.im_weights_d
 
     def get_im_weights_loss(self):
-        """Computes ell_2 loss for importance weights.""" 
+        """Computes ell_2 loss of the importance weights (based on current statistics)."""
         im_weights = self.get_im_weights()
         source_confusion_mtx = self.get_source_confusion_mtx()
         target_pred_dist = self.get_target_pred_dist()       
@@ -197,6 +225,12 @@ class ImWeightsEstimator(torch.nn.Module):
         return loss
 
     def update_im_weights_qp(self):
+        """Updates the importance weights to their optimal values (based on 
+        current statistics) by solving a QP.
+
+        This could be slower than gradient-based methods by back-propagating
+        the ell_2 loss from `get_im_weights_loss` on GPU training.
+        """
         source_confusion_mtx = self.get_source_confusion_mtx()
         target_pred_dist = self.get_target_pred_dist()       
         iw_weights_new = im_weights_update(source_confusion_mtx.cpu().numpy(), self.source_class_dist.cpu().numpy(), target_pred_dist.cpu().numpy())
@@ -205,13 +239,18 @@ class ImWeightsEstimator(torch.nn.Module):
         return iw_weights_new
 
     def forward(self, y_true=None, y_proba=None, is_target_dom=None, s=5e-3):
-        """Updates the source domain confusion matrix and target domain predicted class distribution.
+        """Updates the source domain confusion matrix and target domain 
+        predicted class distribution with the provided samples.
 
         Args:
             y_true: The true class labels.
             y_proba: The (predicted) class probabilities.
             is_target_dom: Whether the data is from the target domain.
-            TODO:s: The learning rate for updating confusion matrix and prediction distribution.
+            s: The learning rate for updating confusion matrix and prediction distribution. 
+               Ignored if `confusion_mtx_agg_mode` is 'exp'.
+        
+        Returns:
+            The ell_2 loss of the importance weights.
         """
 
         if is_target_dom:
@@ -244,15 +283,19 @@ class ImWeightsEstimator(torch.nn.Module):
         return self.get_im_weights_loss()
 
 
-
 def im_weights_update(source_cov, source_y, target_y):
-    """Solve a Quadratic Program to compute the optimal importance weight under the generalized label shift assumption. 
+    """
+    Solve a Quadratic Program to compute the optimal importance weight 
+    under the generalized label shift assumption. 
+    
     Adapted from https://github.com/microsoft/Domain-Adaptation-with-Conditional-Distribution-Matching-and-Generalized-Label-Shift
 
     Args:
-        source_cov: The covariance matrix of predicted-label and true label of the source domain.
+        source_cov: The covariance matrix of predicted-label and true 
+                    label of the source domain.
         source_y: The marginal label distribution of the source domain.
-        target_y: The marginal pseudo-label distribution of the target domain from the current classifier.
+        target_y: The marginal pseudo-label distribution of the target 
+                  domain from the current classifier.
 
     Returns:
         Estimated importance weights.
@@ -273,8 +316,3 @@ def im_weights_update(source_cov, source_y, target_y):
 
     im_weights = np.array(sol["x"])
     return im_weights
-
-
-
-
-
