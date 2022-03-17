@@ -390,7 +390,7 @@ def main():
                     else:
                         loss_ad = model_ad(grl(feature), y_true=y_true, is_target_dom=is_target_dom)
 
-                    loss_ad = lambda_domain_alignment * loss_ad / args.grad_accumulation_steps
+                    loss_ad = loss_ad / args.grad_accumulation_steps
                     joint_loss += loss_ad
 
                     # Update importance weights statistics and get its loss
