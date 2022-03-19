@@ -86,7 +86,7 @@ def main():
         dataset_name=args.dataset_name_source,
         dataset_config_name=args.dataset_config_name_source,
         train_file=args.train_file_source,
-        validation_file=args.validation_file_source,
+        evaluation_file=args.evaluation_file_source,
         text_column_name=args.text_column_name_source,
         label_column_name=args.label_column_name_source,
         task_name=args.task_name,
@@ -173,14 +173,14 @@ def main():
     # Get, tokenize, and create DataLoaders for target domain datasets
     train_dataloader_target = None
     eval_dataloader_target = None
-    if any([x is not None for x in [args.dataset_name_target, args.train_file_target, args.validation_file_target]]):
+    if any([x is not None for x in [args.dataset_name_target, args.train_file_target, args.evaluation_file_target]]):
         train_dataset_target, eval_dataset_target = tokenize_raw_dataset(
             tokenizer,
             *load_raw_dataset(
                 dataset_name=args.dataset_name_target,
                 dataset_config_name=args.dataset_config_name_target,
                 train_file=args.train_file_target,
-                validation_file=args.validation_file_target,
+                evaluation_file=args.evaluation_file_target,
                 text_column_name=args.text_column_name_target,
                 label_column_name=args.label_column_name_target,
                 task_name=args.task_name,
@@ -405,7 +405,7 @@ def main():
 
             # Compute gradient penalty
             if args.domain_alignment:
-                grad_penalty = domain_alignment.calc_gradient_penalty(model_ad, *features_detached)
+                grad_penalty = domain_alignment.calc_gradient_penalty(model_ad.net, *features_detached)
                 grad_penalty = args.lambda_grad_penalty * grad_penalty / args.grad_accumulation_steps
                 grad_penalty.backward()
 
@@ -455,14 +455,14 @@ def parse_args():
     parser.add_argument("--dataset_name_source", type=str, default=None, help="The name of the dataset to use (via the datasets library). Source domain.")
     parser.add_argument("--dataset_config_name_source", type=str, default=None, help="The configuration name of the dataset to use (via the datasets library). Source domain.")
     parser.add_argument("--train_file_source", type=str, default=None, help="A csv or a json file containing the training data. Source domain.")
-    parser.add_argument("--validation_file_source", type=str, default=None, help="A csv or a json file containing the validation data. Source domain.")
+    parser.add_argument("--evaluation_file_source", type=str, default=None, help="A csv or a json file containing the evaluation data. Source domain.")
     parser.add_argument("--text_column_name_source", type=str, default=None, help="The column name of text to input in the file (a csv or JSON file). Source domain.")
     parser.add_argument("--label_column_name_source", type=str, default=None, help="The column name of label to input in the file (a csv or JSON file). Source domain.")
 
     parser.add_argument("--dataset_name_target", type=str, default=None, help="The name of the dataset to use (via the datasets library). Target domain.")
     parser.add_argument("--dataset_config_name_target", type=str, default=None, help="The configuration name of the dataset to use (via the datasets library). Target domain.")
     parser.add_argument("--train_file_target", type=str, default=None, help="A csv or a json file containing the training data. Target domain.")
-    parser.add_argument("--validation_file_target", type=str, default=None, help="A csv or a json file containing the validation data. Target domain.")
+    parser.add_argument("--evaluation_file_target", type=str, default=None, help="A csv or a json file containing the evaluation data. Target domain.")
     parser.add_argument("--text_column_name_target", type=str, default=None, help="The column name of text to input in the file (a csv or JSON file). Target domain.")
     parser.add_argument("--label_column_name_target", type=str, default=None, help="The column name of label to input in the file (a csv or JSON file). Target domain.")
 
@@ -512,15 +512,15 @@ def parse_args():
     args = parser.parse_args()
 
     # Sanity checks
-    if args.task_name is None and args.train_file_source is None and args.validation_file_source is None:
-        raise ValueError("Need either a task name or a training/validation file.")
+    if args.task_name is None and args.train_file_source is None and args.evaluation_file_source is None:
+        raise ValueError("Need either a task name or a training/evaluation file.")
     else:
         if args.train_file_source is not None:
             extension = args.train_file_source.split(".")[-1]
             assert extension in ["csv", "json"], "`train_file` should be a csv or a json file."
-        if args.validation_file_source is not None:
-            extension = args.validation_file_source.split(".")[-1]
-            assert extension in ["csv", "json"], "`validation_file` should be a csv or a json file."
+        if args.evaluation_file_source is not None:
+            extension = args.evaluation_file_source.split(".")[-1]
+            assert extension in ["csv", "json"], "`evaluation_file` should be a csv or a json file."
 
     return args
 

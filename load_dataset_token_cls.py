@@ -8,7 +8,7 @@ def load_raw_dataset(
     dataset_name=None,
     dataset_config_name=None,
     train_file=None,
-    validation_file=None,
+    evaluation_file=None,
     text_column_name=None,
     label_column_name=None,
     task_name="ner",
@@ -26,9 +26,9 @@ def load_raw_dataset(
         data_files = {}
         if train_file is not None:
             data_files["train"] = train_file
-        if validation_file is not None:
-            data_files["test"] = validation_file
-        extension = (train_file if train_file is not None else validation_file).split(".")[-1]
+        if evaluation_file is not None:
+            data_files["test"] = evaluation_file
+        extension = (train_file if train_file is not None else evaluation_file).split(".")[-1]
         raw_datasets = load_dataset(extension, data_files=data_files)
     # See more about loading any type of standard or custom dataset (from files, python dict, pandas DataFrame, etc) at
     # https://huggingface.co/docs/datasets/loading_datasets.html.
