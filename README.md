@@ -2,7 +2,7 @@
 
 Modules for performing class-importance-weighted domain alignment (IWDA) in PyTorch for unsupervised domain adaptation, as well as on text and token classifiers based on pre-trained language models using the [🤗 Transformers library](https://github.com/huggingface/transformers). The alignment is implemented via adversarial training with Wasserstein-1 critic loss and zero-centered gradient penalty.
 
-The modules are found in `domain_alignment.py`: `W1CriticWithImWeights`, `W1CriticWithImWeightsEstimation`, `ImWeightsEstimator`. Example usage in `run_text_cls.py` and `run_token_cls.py`.
+The modules are found in `domain_alignment.py`. They are `W1CriticWithImWeights`, `W1CriticWithImWeightsEstimation`, and `ImWeightsEstimator`. Example usage in `run_text_cls.py` and `run_token_cls.py`.
 
 ## Example: Unsupservised Cross-Lingual Learning
 
@@ -40,10 +40,10 @@ The BibTeX entry for our paper is:
 }
 ```
 
-Some code [comes from](https://github.com/microsoft/Domain-Adaptation-with-Conditional-Distribution-Matching-and-Generalized-Label-Shift) the following paper on importance-weighted unsupervised domain adaptaion:
+Our implementation follows the following paper closely, where some code [come from](https://github.com/microsoft/Domain-Adaptation-with-Conditional-Distribution-Matching-and-Generalized-Label-Shift):
 
 ```bibtex
-@inproceedings{tachet2020domain,
+@inproceedings{tachetdescombes2020domainadaptation,
   title={Domain Adaptation with Conditional Distribution Matching and Generalized Label Shift},
   author={Tachet des Combes, Remi and Zhao, Han and Wang, Yu-Xiang and Gordon, Geoff},
   year={2020},
