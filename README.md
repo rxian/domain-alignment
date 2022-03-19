@@ -40,7 +40,7 @@ The BibTeX entry for our paper is:
 }
 ```
 
-Our implementation follows the following paper closely, where some code [comes from](https://github.com/microsoft/Domain-Adaptation-with-Conditional-Distribution-Matching-and-Generalized-Label-Shift):
+Our implementation follows the following paper closely, where some code [come from](https://github.com/microsoft/Domain-Adaptation-with-Conditional-Distribution-Matching-and-Generalized-Label-Shift):
 
 ```bibtex
 @inproceedings{tachetdescombes2020domainadaptation,
