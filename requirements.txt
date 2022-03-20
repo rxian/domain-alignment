@@ -4,4 +4,4 @@ numpy==1.22.2
 seqeval==1.2.2
 torch==1.10.2
 tqdm==4.62.3
-transformers==4.16.2
+transformers==4.15.0

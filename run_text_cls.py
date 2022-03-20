@@ -9,11 +9,12 @@ import logging
 import numpy as np
 
 import torch
+from torch.optim import AdamW
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
 import transformers
-from transformers import MODEL_MAPPING, AdamW, AutoConfig, AutoModelForSequenceClassification, AutoTokenizer, DataCollatorWithPadding, SchedulerType, default_data_collator, get_scheduler, set_seed
+from transformers import MODEL_MAPPING, AutoConfig, AutoModelForSequenceClassification, AutoTokenizer, DataCollatorWithPadding, SchedulerType, default_data_collator, get_scheduler, set_seed
 
 from datasets import load_metric
 import load_dataset_text_cls
