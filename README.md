@@ -1,14 +1,17 @@
 # Importance-Weighted Domain Alignment
 
-Modules for performing class-importance-weighted domain alignment (IWDA) in PyTorch for unsupervised domain adaptation, as well as on text and token classifiers based on pre-trained language models using the [🤗 Transformers library](https://github.com/huggingface/transformers). The alignment is implemented via adversarial training with Wasserstein-1 critic loss and zero-centered gradient penalty.
+Modules for performing class-importance-weighted domain alignment (IWDA) in PyTorch for unsupervised domain adaptation, as well as on text and token classifiers built upon pre-trained language models using the [🤗 Transformers library](https://github.com/huggingface/transformers). The alignment is implemented using adversarial training with Wasserstein-1 critic loss and zero-centered gradient penalty.
 
-The modules are found in `domain_alignment.py`. They are `W1CriticWithImWeights`, `W1CriticWithImWeightsEstimation`, and `ImWeightsEstimator`. Example usage in `run_text_cls.py` and `run_token_cls.py`.
+The modules are found in `domain_alignment.py`. They are `W1CriticWithImWeights`, `W1CriticWithImWeightsEstimation`, and `ImWeightsEstimator`. See `run_text_cls.py`, `run_token_cls.py` and below for example usage.
 
-## Example: Unsupservised Cross-Lingual Learning
+## Example: Unsupervised Cross-Lingual Learning
 
-One usage of IWDA is for unsupervised cross-lingual transfer of pre-trained language models on downstream applications, discussed and evaluated in our ICLR 2022 paper “[Cross-Lingual Transfer with Class-Weighted Language-Invariant Representations](https://openreview.net/forum?id=k7-s5HSSPE5)”. 
+One usage of IWDA is unsupervised cross-lingual transfer of pre-trained language models on downstream tasks, discussed and evaluated in our ICLR 2022 paper “[Cross-Lingual Transfer with Class-Weighted Language-Invariant Representations](https://openreview.net/forum?id=k7-s5HSSPE5)”. 
 
-The commands for transferring mBERT from English to Spanish on the named-entity recognition (NER) task (on CoNLL 2002 and 2003 datasets), and to Japanese on the sentiment analysis task (on Multilingual Amazon Reviews Corpus), are available in `run_iclr2022.sh` (check package `requirements.txt`). 
+The commands for the following unsupervised cross-lingual transfer tasks are provided in `run_iclr2022.sh` (also check package `requirements.txt`):
+
+- mBERT transfer from English to Spanish for named-entity recognition on CoNLL-2002 and 2003 datasets.
+- mBERT transfer from English to Japanese for sentiment analysis on Multilingual Amazon Reviews Corpus.
 
 Results on CoNLL NER with mBERT (average of 5 runs):
 
@@ -34,8 +37,8 @@ The BibTeX entry for our paper is:
 @inproceedings{xian2022crosslingual,
   title={Cross-Lingual Transfer with Class-Weighted Language-Invariant Representations},
   author={Ruicheng Xian and Heng Ji and Han Zhao},
-  booktitle={International Conference on Learning Representations},
   year={2022},
+  booktitle={International Conference on Learning Representations},
   url={https://openreview.net/forum?id=k7-s5HSSPE5}
 }
 ```

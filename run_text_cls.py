@@ -109,8 +109,8 @@ def main():
         # the samples passed).
         data_collator = DataCollatorWithPadding(tokenizer)
 
-    train_dataloader_source = DataLoader(train_dataset_source, shuffle=True, collate_fn=data_collator, batch_size=args.per_device_per_domain_train_batch_size)
-    eval_dataloader_source = DataLoader(eval_dataset_source, collate_fn=data_collator, batch_size=args.per_device_eval_batch_size)
+    train_dataloader_source = DataLoader(train_dataset_source, shuffle=True, collate_fn=data_collator, batch_size=args.train_batch_size_per_domain)
+    eval_dataloader_source = DataLoader(eval_dataset_source, collate_fn=data_collator, batch_size=args.eval_batch_size)
 
     # Get, tokenize, and create DataLoaders for target domain datasets
     train_dataloader_target = None
@@ -135,9 +135,9 @@ def main():
             max_length=args.max_length,
         )
         train_dataloader_target = DataLoader(
-            train_dataset_target, shuffle=True, collate_fn=data_collator, batch_size=args.per_device_per_domain_train_batch_size
+            train_dataset_target, shuffle=True, collate_fn=data_collator, batch_size=args.train_batch_size_per_domain
         )
-        eval_dataloader_target = DataLoader(eval_dataset_target, collate_fn=data_collator, batch_size=args.per_device_eval_batch_size)
+        eval_dataloader_target = DataLoader(eval_dataset_target, collate_fn=data_collator, batch_size=args.eval_batch_size)
 
     # Optimizer
     # Split weights in two groups, one with weight decay and the other not.
@@ -242,14 +242,14 @@ def main():
         optimizer_ad = AdamW(optimizer_ad_grouped_parameters)
 
     # Train!
-    total_batch_size = args.per_device_per_domain_train_batch_size * args.grad_accumulation_steps
+    total_batch_size = args.train_batch_size_per_domain * args.grad_accumulation_steps
 
     logger.info("***** Running training *****")
     logger.info(f"  Num examples source = {len(train_dataset_source)}")
     if train_dataloader_target is not None:
         logger.info(f"  Num examples target = {len(train_dataset_target)}")
     logger.info(f"  Num Epochs = {args.num_train_epochs}")
-    logger.info(f"  Instantaneous batch size per device = {args.per_device_per_domain_train_batch_size}")
+    logger.info(f"  Instantaneous batch size per device = {args.train_batch_size_per_domain}")
     logger.info(f"  Total train batch size (w. accumulation) = {total_batch_size}")
     logger.info(f"  Gradient Accumulation steps = {args.grad_accumulation_steps}")
     logger.info(f"  Total optimization steps = {args.num_train_steps}")
@@ -406,8 +406,8 @@ def parse_args():
 
     parser.add_argument("--num_train_epochs", type=int, default=4, help="Total number of training epochs to perform.")
     parser.add_argument("--num_train_steps", type=int, default=None, help="Total number of training steps to perform. If provided, overrides num_train_epochs.")
-    parser.add_argument("--per_device_per_domain_train_batch_size", type=int, default=8, help="Batch size (per device and domain) for the training dataloader.")
-    parser.add_argument("--per_device_eval_batch_size", type=int, default=8, help="Batch size (per device) for the evaluation dataloader.")
+    parser.add_argument("--train_batch_size_per_domain", type=int, default=8, help="Batch size (per domain) for the training dataloader.")
+    parser.add_argument("--eval_batch_size", type=int, default=8, help="Batch size for the evaluation dataloader.")
     parser.add_argument("--grad_accumulation_steps", type=int, default=1, help="Number of updates steps to accumulate before performing a backward/update pass.")
 
     parser.add_argument("--lr", type=float, default=1e-5, help="Initial learning rate (after the potential warmup period) to use.")
