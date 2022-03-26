@@ -66,6 +66,71 @@ def calc_gradient_penalty(netD, real_data, fake_data, center=0):
     return gradient_penalty
 
 
+def im_weights_update(source_cov, source_y, target_y):
+    """
+    Solve a Quadratic Program to compute the optimal importance weight 
+    under the generalized label shift assumption. 
+    
+    Adapted from https://github.com/microsoft/Domain-Adaptation-with-Conditional-Distribution-Matching-and-Generalized-Label-Shift
+
+    Args:
+        source_cov: The covariance matrix of predicted-label and true 
+                    label of the source domain.
+        source_y: The marginal label distribution of the source domain.
+        target_y: The marginal pseudo-label distribution of the target 
+                  domain from the current classifier.
+
+    Returns:
+        Estimated importance weights.
+    """
+
+    dim = source_cov.shape[0]
+    source_y = source_y.reshape(-1, 1).astype(np.double)
+    target_y = target_y.reshape(-1, 1).astype(np.double)
+    source_cov = source_cov.astype(np.double)
+
+    P = matrix(np.dot(source_cov.T, source_cov), tc="d")
+    q = -matrix(np.dot(source_cov, target_y), tc="d")
+    G = matrix(-np.eye(dim), tc="d")
+    h = matrix(np.zeros(dim), tc="d")
+    A = matrix(source_y.reshape(1, -1), tc="d")
+    b = matrix([1.0], tc="d")
+    sol = solvers.qp(P, q, G, h, A, b)
+
+    im_weights = np.array(sol["x"])
+    return im_weights
+
+
+def gaussian_kernel(source, target, kernel_mul=2.0, kernel_num=5, fix_sigma=None):
+    """Computes Gaussian (for MK-MMD) kernel between source and target.
+
+    Adapted from https://github.com/microsoft/Domain-Adaptation-with-Conditional-Distribution-Matching-and-Generalized-Label-Shift/blob/main/loss.py
+
+    Args:
+        source: Source data.
+        target: Target data.
+        kernel_mul: Multiplicative factor of kernel bandwidth.
+        kernel_num: Number of kernels.
+        fix_sigma: Fix kernel bandwidth (otherwise use distance between data).
+    """
+    n_samples = int(source.size()[0])+int(target.size()[0])
+    total = torch.cat([source, target], dim=0)
+    total0 = total.unsqueeze(0).expand(
+        int(total.size(0)), int(total.size(0)), int(total.size(1)))
+    total1 = total.unsqueeze(1).expand(
+        int(total.size(0)), int(total.size(0)), int(total.size(1)))
+    L2_distance = ((total0-total1)**2).sum(2)
+    if fix_sigma:
+        bandwidth = fix_sigma
+    else:
+        bandwidth = torch.sum(L2_distance.data) / (n_samples**2-n_samples)
+    bandwidth /= kernel_mul ** (kernel_num // 2)
+    bandwidth_list = [bandwidth * (kernel_mul**i) for i in range(kernel_num)]
+    kernel_val = [torch.exp(-L2_distance / bandwidth_temp)
+                  for bandwidth_temp in bandwidth_list]
+    return sum(kernel_val)  # /len(kernel_val)
+
+
 class AdversarialNetwork(torch.nn.Module):
     """A single-hidden-layer ReLU discriminator."""
     def __init__(self, in_feature, hidden_size):
@@ -105,7 +170,7 @@ class W1CriticWithImWeights(torch.nn.Module):
         """Gets importance weights."""
         return self.im_weights
 
-    def forward(self, x, y_true=None, is_target_dom=None, alpha=1):
+    def forward(self, x, domain_labels, y_true=None, alpha=1):
         """Computes unregularized W1 critic loss; need to add gradient penalty.
         
         Args:
@@ -119,31 +184,127 @@ class W1CriticWithImWeights(torch.nn.Module):
         """
 
         score = self.net(x)
+        score = score.view(-1)
         im_weights = self.get_im_weights()
-        if not is_target_dom and im_weights is not None:
+        if im_weights is not None:
             # Apply importance weights to the critic's scores on source examples.
             im_weights = (alpha*im_weights + (1-alpha)).detach()
-            score = score * im_weights[y_true]
-        loss = score.mean()
-        if is_target_dom:
-            loss = -loss
+            score[domain_labels==0] *= im_weights[y_true]
+        loss = score[domain_labels==0].mean() - score[domain_labels==1].mean()
         return loss
 
 
-class W1CriticWithImWeightsEstimation(W1CriticWithImWeights):
-    """An adversary with class-importance-weighted Wasserstein-1 loss.
-    
-    Inclues helpers to collect statistics and compute the loss for estimating the weights.
-    """
+class JSDAdversaryWithImWeights(torch.nn.Module):
+    """An adversary with class-importance-weighted cross-entropy loss."""
 
-    def __init__(self, in_feature, hidden_size, num_classes, source_class_dist, im_weights_init=None, hard_confusion_mtx=True):
-        super(W1CriticWithImWeightsEstimation, self).__init__(in_feature, hidden_size)
+    def __init__(self, in_feature, hidden_size, im_weights):
+        """Inits the JSD adversary.
 
-        self.im_weights_estimator = ImWeightsEstimator(num_classes, source_class_dist, im_weights_init, hard_confusion_mtx)
+        Args:
+            in_feature: The input data/feature dimension (scalar).
+            hidden_size: The width of the hidden layer.
+            im_weights: Importance weights for weighting the critic loss.        
+        """
+
+        super(JSDAdversaryWithImWeights, self).__init__()
+        self.net = AdversarialNetwork(in_feature, hidden_size)
+        self.register_buffer('im_weights', im_weights, persistent=True)
 
     def get_im_weights(self):
-        return self.im_weights_estimator.get_im_weights()
-    
+        """Gets importance weights."""
+        return self.im_weights
+
+    def forward(self, x, domain_labels, y_true=None, alpha=1):
+        """Computes cross-entropy adversarial loss.
+        
+        Args:
+            x: The input data/features.
+            y_true: The true class labels.
+            is_target_dom: Whether the data is from the target domain.
+            alpha: Interpolates between using im_weights (alpha=1) and uniform weights (alpha=0).
+
+        Returns:
+            The cross-entropy adversarial loss.
+        """
+
+        outputs = self.net(x)
+        score = torch.sigmoid(outputs)
+        score = torch.nn.BCELoss(reduction='none')(score, domain_labels)
+        score = score.view(-1)
+        im_weights = self.get_im_weights()
+        if im_weights is not None:
+            # Apply importance weights to the critic's scores on source examples.
+            im_weights = (alpha*im_weights + (1-alpha)).detach()
+            score[domain_labels==0] *= im_weights[y_true]
+        loss = score.mean()
+        return loss
+
+
+class MMDWithImWeights(torch.nn.Module):
+    """MMD estimator with class-importance-weighting."""
+
+    def __init__(self, im_weights=None, kernel_mul=2.0, kernel_num=5, fix_sigma=None):
+        """Inits MMD estimator.
+
+        Args:
+            im_weights: Importance weights for weighting the critic loss.
+            See `gaussian_kernel` for the rest.
+        """
+
+        super(MMDWithImWeights, self).__init__()
+        self.kernel_mul = kernel_mul
+        self.kernel_num = kernel_num
+        self.fix_sigma = fix_sigma
+        self.register_buffer('im_weights', im_weights, persistent=True)
+
+    def get_im_weights(self):
+        """Gets importance weights."""
+        return self.im_weights
+
+    def forward(self, x, domain_labels, y_true=None, alpha=1):
+        """Computes unregularized W1 critic loss; need to add gradient penalty.
+        
+        Args:
+            x: The input data/features.
+            y_true: The true class labels.
+            domain_labels: The domain label.
+            alpha: Interpolates between using im_weights (alpha=1) and uniform weights (alpha=0).
+
+        Returns:
+            The unregularized W1 critic loss.
+        """
+
+        x_s, x_t = x[domain_labels==0], x[domain_labels==1]
+        n_s, n_t = len(x_s), len(x_t)
+
+        kernels = gaussian_kernel(x_s, x_t, kernel_mul=self.kernel_mul, kernel_num=self.kernel_num, fix_sigma=self.fix_sigma)
+
+        im_weights = self.get_im_weights()
+        if im_weights is not None:
+            im_weights = (alpha*im_weights + (1-alpha)).detach()
+        else:
+            im_weights = torch.ones(y_true.max(),dype=kernels.dtype,device=kernels.device)
+
+        # Non-cross terms
+        loss_1 = 0
+
+        idx = torch.triu_indices(n_s, n_s, 1)
+        w = im_weights[y_true[idx[0]]]*im_weights[y_true[idx[1]]]
+        loss_1 += (kernels[idx[0],idx[1]]*w).sum() / float((n_s*(n_s-1))/2)
+        
+        idx = torch.triu_indices(n_t, n_t, 1)
+        loss_1 += (kernels[idx[0]+n_s,idx[1]+n_s]).sum() / float((n_t*(n_t-1))/2)
+
+        # Cross terms
+        loss_2 = 0
+
+        idx_s, idx_t = torch.meshgrid(torch.arange(n_s), torch.arange(n_t), indexing='ij')
+        idx_s, idx_t = idx_s.reshape(-1), idx_t.reshape(-1)
+        w = im_weights[y_true[idx_s]]
+        loss_2 += (kernels[idx_s,idx_t+n_s]*w).sum() / float(n_s*n_t)
+
+        return loss_1 - loss_2*2
+
 
 class ImWeightsEstimator(torch.nn.Module):
     """A class importance weight estimator.
@@ -279,38 +440,3 @@ class ImWeightsEstimator(torch.nn.Module):
                 self.source_confusion_mtx += this_source_confusion_mtx
 
         return self.get_im_weights_loss()
-
-
-def im_weights_update(source_cov, source_y, target_y):
-    """
-    Solve a Quadratic Program to compute the optimal importance weight 
-    under the generalized label shift assumption. 
-    
-    Adapted from https://github.com/microsoft/Domain-Adaptation-with-Conditional-Distribution-Matching-and-Generalized-Label-Shift
-
-    Args:
-        source_cov: The covariance matrix of predicted-label and true 
-                    label of the source domain.
-        source_y: The marginal label distribution of the source domain.
-        target_y: The marginal pseudo-label distribution of the target 
-                  domain from the current classifier.
-
-    Returns:
-        Estimated importance weights.
-    """
-
-    dim = source_cov.shape[0]
-    source_y = source_y.reshape(-1, 1).astype(np.double)
-    target_y = target_y.reshape(-1, 1).astype(np.double)
-    source_cov = source_cov.astype(np.double)
-
-    P = matrix(np.dot(source_cov.T, source_cov), tc="d")
-    q = -matrix(np.dot(source_cov, target_y), tc="d")
-    G = matrix(-np.eye(dim), tc="d")
-    h = matrix(np.zeros(dim), tc="d")
-    A = matrix(source_y.reshape(1, -1), tc="d")
-    b = matrix([1.0], tc="d")
-    sol = solvers.qp(P, q, G, h, A, b)
-
-    im_weights = np.array(sol["x"])
-    return im_weights
