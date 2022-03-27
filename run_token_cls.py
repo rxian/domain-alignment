@@ -22,6 +22,12 @@ from load_dataset_token_cls import load_raw_dataset, tokenize_raw_dataset
 
 import domain_alignment
 
+import os
+import datetime
+try:
+    import wandb
+except ImportError:
+    pass
 
 logger = logging.getLogger(__name__)
 
@@ -76,12 +82,19 @@ def main():
     # accelerator.is_local_main_process is only True for one process per machine.
     logger.setLevel(logging.INFO)
     load_dataset_token_cls.datasets.utils.logging.set_verbosity_warning()
-    transformers.utils.logging.set_verbosity_info()
+    transformers.utils.logging.set_verbosity_warning()
 
     if args.disable_tqdm:
         # https://stackoverflow.com/a/67238486/7112125
         from functools import partialmethod
         tqdm.__init__ = partialmethod(tqdm.__init__, disable=True)
+
+    use_wandb = 'WANDB_ENTITY' in os.environ
+    if use_wandb:
+        name = args.output_dir
+        if name is not None:
+            name = os.path.basename(name)
+        wandb.init(group=args.wandb_group_name, name=name)
 
     # If passed along, set the training seed now.
     if args.seed is not None:
@@ -322,6 +335,8 @@ def main():
         if optimizer_ad_grouped_parameters:
             optimizer_ad = AdamW(optimizer_ad_grouped_parameters)
 
+    wandb.config.update(vars(args))
+
     # Train!
     total_batch_size = args.train_batch_size_per_domain * args.grad_accumulation_steps
 
@@ -342,6 +357,7 @@ def main():
     # Only show the progress bar once on each machine.
     progress_bar = tqdm(range(args.num_train_steps))
     completed_steps = 0
+    start_time = datetime.datetime.now()
 
     train_dataloaders = (train_dataloader_source,) + ((train_dataloader_target,) if train_dataloader_target is not None else ())
     eval_dataloaders = (eval_dataloader_source,) + ((eval_dataloader_target,) if eval_dataloader_target is not None else ())
@@ -350,6 +366,9 @@ def main():
         model.train()
         iterators = [iter(x) for x in train_dataloaders]
         
+        losses = []
+        losses_da = []
+
         step = 0
         while True:
 
@@ -380,8 +399,8 @@ def main():
 
                 if not is_target_dom:
                     loss = outputs.loss
-                    loss = loss / args.grad_accumulation_steps
-                    joint_loss += loss
+                    losses.append(loss.item())
+                    joint_loss += loss / args.grad_accumulation_steps
 
                 if args.domain_alignment:
                     # Mask out inputs that are not to be labeled.
@@ -433,8 +452,8 @@ def main():
                     alpha_im_weights *= min(1,completed_steps/(args.num_train_steps*args.warmup_ratio_im_weights))
 
                 loss_ad = model_ad(features_concat, domain_labels, y_true=source_dom_labels, alpha=alpha_im_weights)
-                loss_ad = loss_ad / args.grad_accumulation_steps
-                joint_loss += loss_ad
+                losses_da.append(loss_ad.item())
+                joint_loss += loss_ad / args.grad_accumulation_steps
 
                 # Compute gradient penalty
                 if args.domain_alignment_loss != 'mmd' and args.lambda_grad_penalty > 0:
@@ -456,6 +475,17 @@ def main():
 
                 progress_bar.update(1)
                 completed_steps += 1
+
+                if completed_steps % args.logging_steps == 0:
+                    logged_info = {'loss': np.mean(losses), 'lr': lr_scheduler.get_last_lr()[0]}
+                    if args.domain_alignment:
+                        logged_info['loss_da'] = np.mean(losses_da)
+                    # logger.info(f"epoch {completed_steps/args.num_train_steps*args.num_train_epochs:.2f}: {logged_info}")
+                    if use_wandb:
+                        wandb.log({**{'train/'+k: v for k, v in logged_info.items()}, 'global_step': completed_steps})
+                    losses = []
+                    losses_da = []
+
                 if completed_steps >= args.num_train_steps:
                     break
             
@@ -480,7 +510,10 @@ def main():
             target_class_dist_estimate = [float("{0:0.4f}".format(i)) for i in (source_class_dist * model_ad.get_im_weights().detach().cpu()).numpy()]
             eval_metric['target_class_dist_estimate'] = target_class_dist_estimate
 
+        logger.info(f"Run time: {datetime.datetime.now()-start_time}, projected time until completion: {(datetime.datetime.now()-start_time)*((args.num_train_steps-completed_steps)/completed_steps)}.")
         logger.info(f"epoch {epoch+1}: {eval_metric}")
+        if use_wandb:
+            wandb.log({**eval_metric, 'global_step': completed_steps})
 
     if args.output_dir is not None:
         model.save_pretrained(args.output_dir)
@@ -553,6 +586,8 @@ def parse_args():
     parser.add_argument("--seed", type=int, default=None, help="A seed for reproducible training.")
     parser.add_argument("--device", type=str, default="cpu", help="Device to train on, e.g. `cpu` or `cuda`.")
     parser.add_argument("--disable_tqdm", action="store_true", help="Silence `tqdm` progress bars.")
+    parser.add_argument("--logging_steps", type=int, default=1000, help="Log every X updates steps.")
+    parser.add_argument("--wandb_group_name", type=str, default=None)
 
     args = parser.parse_args()
 
