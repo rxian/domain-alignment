@@ -586,7 +586,7 @@ def parse_args():
     parser.add_argument("--seed", type=int, default=None, help="A seed for reproducible training.")
     parser.add_argument("--device", type=str, default="cpu", help="Device to train on, e.g. `cpu` or `cuda`.")
     parser.add_argument("--disable_tqdm", action="store_true", help="Silence `tqdm` progress bars.")
-    parser.add_argument("--logging_steps", type=int, default=1000, help="Log every X updates steps.")
+    parser.add_argument("--logging_steps", type=int, default=100, help="Log every X updates steps.")
     parser.add_argument("--wandb_group_name", type=str, default=None)
 
     args = parser.parse_args()
